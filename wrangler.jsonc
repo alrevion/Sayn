@@ -19,9 +19,14 @@
       "migrations_dir": "migrations"
     }
   ],
-  "triggers": {
-    "crons": ["*/5 * * * *"]
-  },
+  // Cron СНЯТ 2026-09-04 по решению владельца: единственный свободный слот из пяти
+  // бесплатных Workers Free отдан Hando, которому scheduled.ts нужен как продукт.
+  // Sayn теряет четыре автоматизации из scheduled.ts: автоархив done через 7 дней,
+  // разовую эскалацию просрочки, напоминание за сутки до дедлайна и напоминание
+  // о непроверенной задаче через 2 дня. На момент снятия все 21 активная задача
+  // уже были эскалированы, done-задач не было -- то есть cron простаивал.
+  // Вернуть при переходе на Workers Paid (лимит 250):
+  //   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
     "AUTH_API_URL": "https://api.auth.alrevion.com",
     // Dedicated bot-only Telegram group used as the attachment blob store across
