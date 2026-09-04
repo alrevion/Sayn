@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { LogOut, Plus, FolderKanban, ClipboardCheck, Trash2, Loader2 } from 'lucide-react';
+import { LogOut, Plus, FolderKanban, ClipboardCheck, Archive, ArchiveRestore, Loader2 } from 'lucide-react';
 import type { Project, User } from '../types';
 import { ApiError, createProject, deleteProject } from '../lib/api';
 
@@ -10,6 +10,8 @@ interface SidebarProps {
   onSelectProject: (id: string) => void;
   personalArchiveActive: boolean;
   onSelectPersonalArchive: () => void;
+  archivedProjectsActive: boolean;
+  onSelectArchivedProjects: () => void;
   onProjectCreated: (project: { id: string; name: string }) => void;
   onProjectDeleted: (projectId: string) => void;
   onLogout: () => void;
@@ -22,6 +24,8 @@ export function Sidebar({
   onSelectProject,
   personalArchiveActive,
   onSelectPersonalArchive,
+  archivedProjectsActive,
+  onSelectArchivedProjects,
   onProjectCreated,
   onProjectDeleted,
   onLogout,
@@ -32,18 +36,20 @@ export function Sidebar({
   const [groupId, setGroupId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
 
-  async function handleDelete(project: Project) {
-    if (!window.confirm(`Delete "${project.name}"? Its tasks stay visible via Archive.`)) return;
-    setDeletingId(project.id);
+  // "Delete" here is a soft archive (backend never hard-deletes a project) --
+  // restorable later from Archived projects, hence the wording/icon below.
+  async function handleArchive(project: Project) {
+    if (!window.confirm(`Archive "${project.name}"? You can restore it later from Archived projects.`)) return;
+    setArchivingId(project.id);
     try {
       await deleteProject(project.id);
       onProjectDeleted(project.id);
     } catch {
-      setError('Could not delete that project.');
+      setError('Could not archive that project.');
     } finally {
-      setDeletingId(null);
+      setArchivingId(null);
     }
   }
 
@@ -146,10 +152,10 @@ export function Sidebar({
                 type="button"
                 onClick={() => onSelectProject(project.id)}
                 aria-current={
-                  !personalArchiveActive && selectedProjectId === project.id ? 'page' : undefined
+                  !personalArchiveActive && !archivedProjectsActive && selectedProjectId === project.id ? 'page' : undefined
                 }
                 className={`flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
-                  !personalArchiveActive && selectedProjectId === project.id
+                  !personalArchiveActive && !archivedProjectsActive && selectedProjectId === project.id
                     ? 'bg-blue-50 font-medium text-blue-700'
                     : 'text-slate-700 hover:bg-slate-100'
                 }`}
@@ -160,15 +166,16 @@ export function Sidebar({
               {canManageProjects ? (
                 <button
                   type="button"
-                  onClick={() => handleDelete(project)}
-                  disabled={deletingId === project.id}
-                  aria-label={`Delete ${project.name}`}
-                  className="shrink-0 rounded p-1 text-slate-300 opacity-0 hover:bg-red-50 hover:text-red-700 focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-50"
+                  onClick={() => handleArchive(project)}
+                  disabled={archivingId === project.id}
+                  aria-label={`Archive ${project.name}`}
+                  title="Archive this project"
+                  className="shrink-0 rounded p-1 text-slate-300 opacity-0 hover:bg-slate-100 hover:text-slate-600 focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-50"
                 >
-                  {deletingId === project.id ? (
+                  {archivingId === project.id ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                   ) : (
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <Archive className="h-3.5 w-3.5" aria-hidden="true" />
                   )}
                 </button>
               ) : null}
@@ -193,6 +200,24 @@ export function Sidebar({
             >
               <ClipboardCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
               My completed tasks
+            </button>
+          </div>
+        ) : null}
+
+        {canManageProjects ? (
+          <div className="mt-4 border-t border-slate-200 pt-3">
+            <button
+              type="button"
+              onClick={onSelectArchivedProjects}
+              aria-current={archivedProjectsActive ? 'page' : undefined}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+                archivedProjectsActive
+                  ? 'bg-blue-50 font-medium text-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <ArchiveRestore className="h-4 w-4 shrink-0" aria-hidden="true" />
+              Archived projects
             </button>
           </div>
         ) : null}

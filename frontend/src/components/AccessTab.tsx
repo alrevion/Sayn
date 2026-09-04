@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Loader2, UserMinus, UserPlus } from 'lucide-react';
-import type { Project, Role, User } from '../types';
+import { Loader2, Pencil, UserMinus, UserPlus } from 'lucide-react';
+import type { Project, ProjectMember, Role, User } from '../types';
 import { ApiError, addMember, createUser, getProjectMembers, getUsers, removeMember } from '../lib/api';
+import { PersonEditModal } from './PersonEditModal';
 
 interface AccessTabProps {
   project: Project;
@@ -13,11 +14,13 @@ interface AccessTabProps {
 // and assigning/removing them from this project. Only super_admin/creator ever
 // see this tab (gated by the caller), matching the backend's role checks.
 export function AccessTab({ project, currentUser }: AccessTabProps) {
+  const canCreateSuperAdmin = currentUser.role === 'creator'; // only creator may promote -- mirrors backend
   const [allUsers, setAllUsers] = useState<User[]>([]);
-  const [members, setMembers] = useState<User[]>([]);
+  const [members, setMembers] = useState<ProjectMember[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [editingPerson, setEditingPerson] = useState<User | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -34,7 +37,10 @@ export function AccessTab({ project, currentUser }: AccessTabProps) {
   useEffect(load, [load]);
 
   const memberIds = new Set(members.map((m) => m.id));
-  const nonMembers = allUsers.filter((u) => !memberIds.has(u.id) && u.role === 'admin');
+  // Each board has its own people now (see routes.ts requireProjectAccess) --
+  // super_admins need an explicit row here too, same as admins, unless they
+  // already show up implicitly (global creator, or this project's own creator).
+  const nonMembers = allUsers.filter((u) => !memberIds.has(u.id) && (u.role === 'admin' || u.role === 'super_admin'));
 
   async function handleAdd(userId: string) {
     setBusyUserId(userId);
@@ -85,18 +91,28 @@ export function AccessTab({ project, currentUser }: AccessTabProps) {
             {members.map((m) => (
               <li
                 key={m.id}
-                className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
               >
-                <span>
-                  {m.name} <span className="text-slate-400">· {m.role.replace('_', ' ')}</span>
-                </span>
-                {m.role === 'admin' ? (
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>{m.name}</span>
+                  <span className="text-xs text-slate-400">· {m.role.replace('_', ' ')}</span>
+                  <span className="text-xs text-slate-400">{m.telegram_username ? `@${m.telegram_username}` : 'no Telegram username'}</span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingPerson(m)}
+                    aria-label={`Edit ${m.name}`}
+                    className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-blue-700"
+                  >
+                    <Pencil className="h-3 w-3" aria-hidden="true" />
+                  </button>
+                </div>
+                {m.is_member ? (
                   <button
                     type="button"
                     onClick={() => handleRemove(m.id)}
                     disabled={busyUserId === m.id}
                     aria-label={`Remove ${m.name} from this project`}
-                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
                   >
                     {busyUserId === m.id ? (
                       <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -106,9 +122,9 @@ export function AccessTab({ project, currentUser }: AccessTabProps) {
                     Remove
                   </button>
                 ) : (
-                  // super_admin/creator always have access to every project -- there's
-                  // no membership row to remove, so no button (would be a no-op).
-                  <span className="text-xs text-slate-400">always has access</span>
+                  // No membership row to remove: either the global creator, or this
+                  // project's own creator (implicit access, not a formal member row).
+                  <span className="shrink-0 text-xs text-slate-400">always has access</span>
                 )}
               </li>
             ))}
@@ -129,14 +145,24 @@ export function AccessTab({ project, currentUser }: AccessTabProps) {
             {nonMembers.map((u) => (
               <li
                 key={u.id}
-                className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
               >
-                <span>{u.name}</span>
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <span>{u.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingPerson(u)}
+                    aria-label={`Edit ${u.name}`}
+                    className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-blue-700"
+                  >
+                    <Pencil className="h-3 w-3" aria-hidden="true" />
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={() => handleAdd(u.id)}
                   disabled={busyUserId === u.id}
-                  className="flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  className="flex shrink-0 items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   {busyUserId === u.id ? (
                     <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -150,6 +176,16 @@ export function AccessTab({ project, currentUser }: AccessTabProps) {
           </ul>
         )}
       </section>
+
+      {editingPerson ? (
+        <PersonEditModal
+          person={editingPerson}
+          canPromoteToSuperAdmin={canCreateSuperAdmin}
+          isSelf={editingPerson.id === currentUser.id}
+          onClose={() => setEditingPerson(null)}
+          onSaved={load}
+        />
+      ) : null}
     </div>
   );
 }
@@ -166,6 +202,7 @@ function CreatePersonForm({
   const canCreateSuperAdmin = currentUser.role === 'creator';
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
+  const [telegramUsername, setTelegramUsername] = useState('');
   const [role, setRole] = useState<Role>('admin');
   const [errors, setErrors] = useState<{ phone?: string; name?: string }>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -182,12 +219,18 @@ function CreatePersonForm({
     setFormError(null);
     setSubmitting(true);
     try {
-      const created = await createUser({ phone: phone.trim(), name: name.trim(), role: role as 'admin' | 'super_admin' });
+      const created = await createUser({
+        phone: phone.trim(),
+        name: name.trim(),
+        role: role as 'admin' | 'super_admin',
+        telegram_username: telegramUsername.trim() || undefined,
+      });
       // You're always creating someone from inside a specific project's Access tab --
       // add them here too in the same step, instead of a separate easy-to-miss step.
-      await addMember(projectId, created.id).catch(() => {}); // best-effort: super_admins don't need a row anyway
+      await addMember(projectId, created.id).catch(() => {}); // best-effort
       setPhone('');
       setName('');
+      setTelegramUsername('');
       setRole('admin');
       onCreated();
     } catch (err) {
@@ -250,6 +293,22 @@ function CreatePersonForm({
               {errors.name}
             </p>
           ) : null}
+        </div>
+
+        <div>
+          <label htmlFor="new-person-username" className="mb-1 block text-xs font-medium text-slate-700">
+            Telegram username (optional)
+          </label>
+          <div className="flex w-44 items-center rounded-md border border-slate-300 bg-white px-2 py-1.5 focus-within:outline focus-within:outline-2 focus-within:outline-blue-600">
+            <span className="text-sm text-slate-400">@</span>
+            <input
+              id="new-person-username"
+              value={telegramUsername}
+              onChange={(e) => setTelegramUsername(e.target.value)}
+              placeholder="telegram_username"
+              className="w-full text-sm focus:outline-none"
+            />
+          </div>
         </div>
 
         {canCreateSuperAdmin ? (

@@ -3,7 +3,7 @@
 // writes a task attributed to MCP_USER_ID (not a stub). Drives the real Worker
 // (src/index) end-to-end against a tiny in-memory D1 fake -- no Workers pool,
 // matching test/access.test.ts.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import type { Env } from '../src/types';
 
@@ -108,12 +108,18 @@ describe('mcp /mcp endpoint', () => {
 
   it('create_task (correct token) writes a real task attributed to MCP_USER_ID', async () => {
     const data = seed();
+    // create_task reaches the real POST /projects/:id/tasks handler, which now
+    // also notifies Telegram -- stub fetch so that doesn't hit the real network.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ result: { message_id: 1 } }), { status: 200 }),
+    );
     // project + responsible given by name (case-insensitive) -- exercises fuzzy resolve.
     const res = await worker.fetch(
       mcpRequest(callTool('create_task', { project: 'alpha', title: 'Ship the thing', responsible: 'bob' }), `Bearer ${TOKEN}`),
       envWith(data),
       ctx,
     );
+    fetchSpy.mockRestore();
     expect(res.status).toBe(200);
 
     const rpc = (await res.json()) as { result?: { content: { text: string }[]; isError?: boolean } };

@@ -5,9 +5,10 @@ import { Sidebar } from './components/Sidebar';
 import { BoardView } from './components/BoardView';
 import { ArchiveTab } from './components/ArchiveTab';
 import { PersonalArchiveTab } from './components/PersonalArchiveTab';
+import { ArchivedProjectsView } from './components/ArchivedProjectsView';
 import { AccessTab } from './components/AccessTab';
-import { ApiError, getProjects } from './lib/api';
-import type { Project } from './types';
+import { ApiError, getProjects, getTask } from './lib/api';
+import type { Project, Task } from './types';
 
 function AuthenticatedApp() {
   const { user, logout } = useAuth();
@@ -16,6 +17,8 @@ function AuthenticatedApp() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectTab, setProjectTab] = useState<'board' | 'archive' | 'access'>('board');
   const [showPersonalArchive, setShowPersonalArchive] = useState(false);
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
+  const [deepLinkTask, setDeepLinkTask] = useState<Task | null>(null);
 
   function loadProjects(selectId?: string) {
     getProjects()
@@ -28,6 +31,23 @@ function AuthenticatedApp() {
   }
 
   useEffect(() => loadProjects(), []);
+
+  // Telegram notifications link to /?task=<id> so tapping one opens straight
+  // to that task instead of just the board. Resolve it once on mount; an
+  // invalid/inaccessible id just falls through to the normal app.
+  useEffect(() => {
+    const taskId = new URLSearchParams(window.location.search).get('task');
+    if (!taskId) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    getTask(taskId)
+      .then((task) => {
+        setDeepLinkTask(task);
+        setSelectedProjectId(task.project_id);
+        setProjectTab('board');
+        setShowPersonalArchive(false);
+      })
+      .catch(() => {});
+  }, []);
 
   if (!user) return null; // AppShell guarantees user is set here
 
@@ -44,12 +64,22 @@ function AuthenticatedApp() {
           setSelectedProjectId(id);
           setProjectTab('board');
           setShowPersonalArchive(false);
+          setShowArchivedProjects(false);
         }}
         personalArchiveActive={showPersonalArchive}
-        onSelectPersonalArchive={() => setShowPersonalArchive(true)}
+        onSelectPersonalArchive={() => {
+          setShowPersonalArchive(true);
+          setShowArchivedProjects(false);
+        }}
+        archivedProjectsActive={showArchivedProjects}
+        onSelectArchivedProjects={() => {
+          setShowArchivedProjects(true);
+          setShowPersonalArchive(false);
+        }}
         onProjectCreated={(project) => {
           loadProjects(project.id);
           setShowPersonalArchive(false);
+          setShowArchivedProjects(false);
         }}
         onProjectDeleted={(projectId) => {
           setProjects((prev) => prev.filter((p) => p.id !== projectId));
@@ -67,6 +97,8 @@ function AuthenticatedApp() {
 
         {showPersonalArchive ? (
           <PersonalArchiveTab />
+        ) : showArchivedProjects ? (
+          <ArchivedProjectsView onRestored={() => loadProjects()} />
         ) : selectedProject ? (
           <>
             {canManage ? (
@@ -116,7 +148,12 @@ function AuthenticatedApp() {
               ) : projectTab === 'access' && canManage ? (
                 <AccessTab key={selectedProject.id} project={selectedProject} currentUser={user} />
               ) : (
-                <BoardView key={selectedProject.id} project={selectedProject} user={user} />
+                <BoardView
+                  key={selectedProject.id}
+                  project={selectedProject}
+                  user={user}
+                  initialTask={deepLinkTask?.project_id === selectedProject.id ? deepLinkTask : null}
+                />
               )}
             </div>
           </>

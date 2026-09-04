@@ -1,12 +1,18 @@
 import type { MouseEvent } from 'react';
-import { ArrowRight, Check, CheckCircle2, Pencil, Trash2, User as UserIcon, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, CheckCircle2, Pencil, Trash2, User as UserIcon, X } from 'lucide-react';
 import type { Task, User } from '../types';
 import { userBadgeColor } from '../lib/badgeColor';
+import { PRIORITY_DOT, PRIORITY_LABEL } from '../lib/priority';
+import { formatDeadlineDays, isReviewOverdue, isTaskOverdue } from '../lib/overdue';
 
 interface TaskCardProps {
   task: Task;
   responsible: User | undefined;
   canManage: boolean; // super_admin/creator
+  currentUserId: string;
+  // Title of the predecessor task, when it's not done/archived yet -- blocks
+  // the advance action (see routes.ts POST /tasks/:id/move).
+  blockedByTitle?: string;
   onEdit: () => void;
   onAdvance: () => void;
   onConfirm: () => void;
@@ -35,6 +41,8 @@ export function TaskCard({
   task,
   responsible,
   canManage,
+  currentUserId,
+  blockedByTitle,
   onEdit,
   onAdvance,
   onConfirm,
@@ -46,11 +54,22 @@ export function TaskCard({
   // todo: anyone with project access. in_progress: super_admin/creator only
   // (editing it hands it back to todo -- see routes.ts PATCH /tasks/:id).
   const editable = task.status === 'todo' || (task.status === 'in_progress' && canManage);
-  const advanceLabel = ADVANCE_LABEL[task.status];
-  const isOverdue =
-    !!task.deadline &&
-    task.status === 'in_progress' &&
-    new Date(task.deadline).getTime() < Date.now();
+  // Only the responsible person can advance their own card -- no role
+  // override, not even super_admin/creator (see routes.ts POST /tasks/:id/move).
+  // The "blocked" arrow is ALSO responsible-person-only: a bystander (or
+  // Creator just looking at someone else's card) shouldn't see any advance
+  // affordance at all, whether it's actionable or blocked.
+  const isResponsible = currentUserId === task.responsible_user_id;
+  const canMove = isResponsible && !blockedByTitle;
+  const advanceLabel = !isResponsible
+    ? undefined
+    : canMove
+      ? ADVANCE_LABEL[task.status]
+      : blockedByTitle && task.status === 'todo'
+        ? `Blocked until "${blockedByTitle}" is done`
+        : undefined;
+  const isOverdue = isTaskOverdue(task);
+  const reviewOverdue = isReviewOverdue(task);
 
   function stop(fn: () => void) {
     return (e: MouseEvent) => {
@@ -69,11 +88,13 @@ export function TaskCard({
       {advanceLabel ? (
         <button
           type="button"
-          onClick={stop(onAdvance)}
-          disabled={busy}
+          onClick={canMove ? stop(onAdvance) : stop(() => {})}
+          disabled={busy || !canMove}
           title={advanceLabel}
           aria-label={advanceLabel}
-          className="absolute right-2 top-2 rounded p-1 text-slate-400 hover:bg-blue-50 hover:text-blue-700 disabled:opacity-50"
+          className={`absolute right-2 top-2 rounded p-1 disabled:cursor-not-allowed ${
+            canMove ? 'text-slate-400 hover:bg-blue-50 hover:text-blue-700 disabled:opacity-50' : 'text-slate-300'
+          }`}
         >
           <ArrowRight className="h-4 w-4" aria-hidden="true" />
         </button>
@@ -89,19 +110,32 @@ export function TaskCard({
           <UserIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span className="truncate">{responsible ? responsible.name : 'Unassigned'}</span>
         </span>
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+          <span className={`h-1.5 w-1.5 rounded-full ${PRIORITY_DOT[task.priority]}`} aria-hidden="true" />
+          {PRIORITY_LABEL[task.priority]}
+        </span>
         {task.deadline ? (
           <span
             className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
               isOverdue ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'
             }`}
           >
-            {formatDeadline(task.deadline)}
+            {formatDeadline(task.deadline)} · {formatDeadlineDays(task.deadline)}
             {isOverdue ? <span className="sr-only"> (overdue)</span> : null}
           </span>
         ) : null}
       </div>
 
       <div className="flex min-h-[1.75rem] items-center gap-2">
+        {reviewOverdue ? (
+          <span
+            className="flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
+            title="Done for 2+ days without being reviewed"
+          >
+            <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+            Review overdue
+          </span>
+        ) : null}
         {task.status === 'done' && canManage && !task.confirmed_at ? (
           <>
             <button

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { ContentBlock, Project, Task, TaskStatus, User } from '../types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ContentBlock, Priority, Project, Task, TaskStatus, User } from '../types';
 import { parseContentBlocks } from '../types';
 import {
   ApiError,
@@ -16,10 +16,14 @@ import {
   type TaskInput,
 } from '../lib/api';
 import { usePolling } from '../hooks/usePolling';
+import { PRIORITIES } from '../lib/priority';
 import type { ComposeBlock } from './ContentEditor';
 import { TaskCard } from './TaskCard';
 import { TaskDetailModal } from './TaskDetailModal';
 import { TaskFormModal } from './TaskFormModal';
+import { RejectTaskModal } from './RejectTaskModal';
+
+type DeadlineSort = 'asc' | 'desc' | null;
 
 const COLUMNS: { status: TaskStatus; label: string }[] = [
   { status: 'todo', label: 'Todo' },
@@ -35,20 +39,49 @@ const NEXT_STATUS: Partial<Record<TaskStatus, TaskStatus>> = {
 interface BoardViewProps {
   project: Project;
   user: User;
+  // Set when arriving via a Telegram notification's deep link (?task=<id>) --
+  // opens straight to that task's detail view instead of just the board.
+  initialTask?: Task | null;
 }
 
-export function BoardView({ project, user }: BoardViewProps) {
+export function BoardView({ project, user, initialTask }: BoardViewProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [members, setMembers] = useState<User[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionInfo, setActionInfo] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [viewingTask, setViewingTask] = useState<Task | null>(null);
+  const [viewingTask, setViewingTask] = useState<Task | null>(initialTask ?? null);
+  const [rejectingTask, setRejectingTask] = useState<Task | null>(null);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [priorityFilter, setPriorityFilter] = useState<Set<Priority>>(new Set());
+  const [deadlineSort, setDeadlineSort] = useState<DeadlineSort>(null);
 
   const canManage = user.role === 'creator' || user.role === 'super_admin';
+
+  function togglePriorityFilter(p: Priority) {
+    setPriorityFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  }
+
+  // Empty filter set = show everything. Deadline-less tasks always sort last,
+  // regardless of direction -- there's no "earlier/later" to place them by.
+  const visibleTasks = useMemo(() => {
+    const filtered = priorityFilter.size === 0 ? tasks : tasks.filter((t) => priorityFilter.has(t.priority));
+    if (!deadlineSort) return filtered;
+    return [...filtered].sort((a, b) => {
+      if (!a.deadline && !b.deadline) return 0;
+      if (!a.deadline) return 1;
+      if (!b.deadline) return -1;
+      const diff = Date.parse(a.deadline) - Date.parse(b.deadline);
+      return deadlineSort === 'asc' ? diff : -diff;
+    });
+  }, [tasks, priorityFilter, deadlineSort]);
 
   const fetchTasks = useCallback(() => {
     getTasks(project.id)
@@ -110,16 +143,29 @@ export function BoardView({ project, user }: BoardViewProps) {
     }
   }
 
-  function handleReject(task: Task) {
-    runAction(task.id, () => rejectTask(task.id));
+  // Not routed through runAction: the modal shows its OWN inline error and stays
+  // open on failure (so the typed reason/extra-days aren't lost), only closing
+  // itself once onReject resolves without throwing.
+  async function handleRejectSubmit(comment: string, extraDays: number) {
+    if (!rejectingTask) return;
+    setActionError(null);
+    setActionInfo(null);
+    await rejectTask(rejectingTask.id, comment, extraDays);
+    fetchTasks();
   }
 
   function handleDelete(task: Task) {
     runAction(task.id, () => deleteTask(task.id).then(() => task));
   }
 
-  // Uploads run after the task itself is saved -- a failed photo must not look
-  // like the task wasn't created/saved (it was), so report it separately.
+  // Both photo and generic-file blocks are backed by an attachment row --
+  // this is what needs cleaning up when a block is dropped from the canvas.
+  function attachmentIdsOf(blocks: ContentBlock[]): string[] {
+    return blocks.flatMap((b) => (b.type === 'image' || b.type === 'file' ? [b.attachment_id] : []));
+  }
+
+  // Uploads run after the task itself is saved -- a failed photo/file must not
+  // look like the task wasn't created/saved (it was), so report it separately.
   // Sequential (not Promise.all) so the resolved order matches the canvas order.
   async function resolveBlocks(taskId: string, blocks: ComposeBlock[]): Promise<{ persisted: ContentBlock[]; failed: number }> {
     const persisted: ContentBlock[] = [];
@@ -130,14 +176,22 @@ export function BoardView({ project, user }: BoardViewProps) {
         continue;
       }
       if (block.attachmentId) {
-        persisted.push({ type: 'image', attachment_id: block.attachmentId });
+        persisted.push(
+          block.kind === 'image'
+            ? { type: 'image', attachment_id: block.attachmentId }
+            : { type: 'file', attachment_id: block.attachmentId, filename: block.filename, mime_type: block.mimeType, size_bytes: block.sizeBytes },
+        );
         continue;
       }
       if (!block.file) continue;
       try {
         const uploaded = await uploadAttachment(taskId, block.file);
-        persisted.push({ type: 'image', attachment_id: uploaded.id });
-        URL.revokeObjectURL(block.previewUrl);
+        persisted.push(
+          block.kind === 'image'
+            ? { type: 'image', attachment_id: uploaded.id }
+            : { type: 'file', attachment_id: uploaded.id, filename: uploaded.filename, mime_type: uploaded.mime_type, size_bytes: uploaded.size_bytes },
+        );
+        if (block.kind === 'image') URL.revokeObjectURL(block.previewUrl);
       } catch {
         failed += 1;
       }
@@ -152,32 +206,40 @@ export function BoardView({ project, user }: BoardViewProps) {
     const { persisted, failed } = await resolveBlocks(id, blocks);
     await updateTask(id, { content_blocks: JSON.stringify(persisted) });
     fetchTasks();
-    if (failed) setActionError(`Task saved, but ${failed} photo(s) failed to upload.`);
+    if (failed) setActionError(`Task saved, but ${failed} photo/file(s) failed to upload.`);
   }
 
   async function handleEditSubmit(input: TaskInput, blocks: ComposeBlock[]) {
     if (!editingTask) return;
-    const before = parseContentBlocks(editingTask)
-      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-      .map((b) => b.attachment_id);
+    const before = attachmentIdsOf(parseContentBlocks(editingTask));
     const { persisted, failed } = await resolveBlocks(editingTask.id, blocks);
-    const after = new Set(persisted.filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image').map((b) => b.attachment_id));
-    // A photo the user removed while editing was only dropped locally (see
-    // ContentEditor) -- only actually delete it now that the edit is saved,
-    // so hitting Cancel never destroys an attachment.
+    const after = new Set(attachmentIdsOf(persisted));
+    // A photo/file the user removed while editing was only dropped locally
+    // (see ContentEditor) -- only actually delete it now that the edit is
+    // saved, so hitting Cancel never destroys an attachment.
     const removed = before.filter((id) => !after.has(id));
     await Promise.allSettled(removed.map((id) => deleteAttachment(id)));
     await updateTask(editingTask.id, { ...input, content_blocks: JSON.stringify(persisted) });
     setEditingTask(null);
     fetchTasks();
-    if (failed) setActionError(`Task saved, but ${failed} photo(s) failed to upload.`);
+    if (failed) setActionError(`Task saved, but ${failed} photo/file(s) failed to upload.`);
   }
 
   const memberById = new Map(members.map((m) => [m.id, m]));
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
+
+  // The predecessor's title, only when it isn't done/archived yet -- see
+  // routes.ts POST /tasks/:id/move for the actual gate this mirrors.
+  function blockedByTitle(task: Task): string | undefined {
+    if (!task.depends_on_task_id) return undefined;
+    const dep = taskById.get(task.depends_on_task_id);
+    if (!dep || dep.status === 'done' || dep.status === 'archived') return undefined;
+    return dep.title;
+  }
 
   return (
     <div className="flex h-full flex-col p-6">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-900">{project.name}</h1>
         <button
           type="button"
@@ -186,6 +248,52 @@ export function BoardView({ project, user }: BoardViewProps) {
         >
           New task
         </button>
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium text-slate-500">Срочность:</span>
+          {PRIORITIES.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => togglePriorityFilter(p.value)}
+              aria-pressed={priorityFilter.has(p.value)}
+              className={`flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${
+                priorityFilter.has(p.value) ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${p.dot}`} aria-hidden="true" />
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="h-4 w-px bg-slate-300" aria-hidden="true" />
+
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium text-slate-500">Дедлайн:</span>
+          <button
+            type="button"
+            onClick={() => setDeadlineSort((s) => (s === 'asc' ? null : 'asc'))}
+            aria-pressed={deadlineSort === 'asc'}
+            className={`rounded-full border px-2 py-1 text-xs font-medium ${
+              deadlineSort === 'asc' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Раньше
+          </button>
+          <button
+            type="button"
+            onClick={() => setDeadlineSort((s) => (s === 'desc' ? null : 'desc'))}
+            aria-pressed={deadlineSort === 'desc'}
+            className={`rounded-full border px-2 py-1 text-xs font-medium ${
+              deadlineSort === 'desc' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Позже
+          </button>
+        </div>
       </div>
 
       {loadError ? (
@@ -210,11 +318,11 @@ export function BoardView({ project, user }: BoardViewProps) {
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
               {col.label}
               <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-normal text-slate-600">
-                {tasks.filter((t) => t.status === col.status).length}
+                {visibleTasks.filter((t) => t.status === col.status).length}
               </span>
             </h2>
             <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
-              {tasks
+              {visibleTasks
                 .filter((t) => t.status === col.status)
                 .map((task) => (
                   <TaskCard
@@ -222,11 +330,13 @@ export function BoardView({ project, user }: BoardViewProps) {
                     task={task}
                     responsible={memberById.get(task.responsible_user_id)}
                     canManage={canManage}
+                    currentUserId={user.id}
+                    blockedByTitle={blockedByTitle(task)}
                     busy={busyId === task.id}
                     onEdit={() => setEditingTask(task)}
                     onAdvance={() => handleAdvance(task)}
                     onConfirm={() => handleConfirm(task)}
-                    onReject={() => handleReject(task)}
+                    onReject={() => setRejectingTask(task)}
                     onDelete={() => handleDelete(task)}
                     onView={() => setViewingTask(task)}
                   />
@@ -245,15 +355,19 @@ export function BoardView({ project, user }: BoardViewProps) {
       ) : null}
 
       {creating ? (
-        <TaskFormModal members={members} onClose={() => setCreating(false)} onSubmit={handleCreateSubmit} />
+        <TaskFormModal members={members} otherTasks={tasks} onClose={() => setCreating(false)} onSubmit={handleCreateSubmit} />
       ) : null}
       {editingTask ? (
         <TaskFormModal
           task={editingTask}
           members={members}
+          otherTasks={tasks}
           onClose={() => setEditingTask(null)}
           onSubmit={handleEditSubmit}
         />
+      ) : null}
+      {rejectingTask ? (
+        <RejectTaskModal task={rejectingTask} onClose={() => setRejectingTask(null)} onReject={handleRejectSubmit} />
       ) : null}
     </div>
   );

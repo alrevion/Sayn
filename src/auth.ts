@@ -2,7 +2,9 @@
 import type { Env, Role, SessionPayload, User } from './types';
 
 export const SESSION_COOKIE = 'session';
-const SESSION_TTL_SECONDS = 30 * 60; // short TTL: stateless token has no revoke path
+// Exported so the cookie's own maxAge (routes.ts, set alongside mintSession) can't
+// drift out of sync with the token's exp claim -- it did once, silently halving this.
+export const SESSION_TTL_SECONDS = 12 * 60 * 60; // stateless token has no revoke path, so still bounded -- but 30min was logging out active users mid-task
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();

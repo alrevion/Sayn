@@ -28,9 +28,12 @@ export const requireRole = (...roles: Role[]): MiddlewareHandler<AppEnv> => asyn
   await next();
 };
 
-// super_admin/creator always pass. admin passes only with a project_memberships row.
-// Returns the SAME 403 whether the project/task is missing or the user isn't a member
-// (no existence leak). For 'task' routes it also stashes the loaded task in context.
+// creator always passes (global oversight). super_admin/admin pass only if they
+// are an explicit project_memberships row OR (super_admin only) the project's
+// creator -- each board has its own people; a super_admin isn't automatically
+// in every project just by holding the role. Returns the SAME 403 whether the
+// project/task is missing or the user isn't a member (no existence leak). For
+// 'task' routes it also stashes the loaded task in context.
 export const requireProjectAccess =
   (source: 'project' | 'task' = 'project'): MiddlewareHandler<AppEnv> =>
   async (c, next) => {
@@ -47,11 +50,16 @@ export const requireProjectAccess =
     }
 
     const role = c.get('role');
-    if (role === 'super_admin' || role === 'creator') return next();
+    if (role === 'creator') return next();
 
     const member = await c.env.DB.prepare('SELECT 1 FROM project_memberships WHERE project_id = ? AND user_id = ?')
       .bind(projectId, c.get('userId'))
       .first();
-    if (!member) return c.json({ error: 'forbidden' }, 403);
-    return next();
+    if (member) return next();
+
+    if (role === 'super_admin') {
+      const project = await c.env.DB.prepare('SELECT created_by FROM projects WHERE id = ?').bind(projectId).first<{ created_by: string }>();
+      if (project?.created_by === c.get('userId')) return next();
+    }
+    return c.json({ error: 'forbidden' }, 403);
   };

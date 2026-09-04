@@ -3,3 +3,4 @@ node_modules/
 .dev.vars
 .dev.vars.*
 frontend/dist/
+.DS_Store

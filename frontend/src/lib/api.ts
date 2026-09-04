@@ -6,7 +6,7 @@
 // (.omc/plans/kanban-plan.md, "Implementation Steps" 2-8). See the shape
 // notes on each function.
 
-import type { ArchivedTaskEntry, Project, Task, TaskEvent, TaskStatus, User } from '../types';
+import type { ArchivedTaskEntry, Priority, Project, ProjectMember, Task, TaskEvent, TaskStatus, User } from '../types';
 
 export class ApiError extends Error {
   status: number;
@@ -67,12 +67,23 @@ export const getProjects = () => get<Project[]>('/projects');
 // the -100 supergroup prefix, so don't ask the user to remember it.
 export const createProject = (name: string, telegramGroupId: string) =>
   post<{ id: string; name: string; telegram_chat_id: string }>('/projects', { name, telegram_group_id: telegramGroupId });
+// A "delete" is really a soft archive (backend sets archived_at, never a hard
+// delete) -- these two round out the loop: see it, bring it back.
 export const deleteProject = (id: string) => del<void>(`/projects/${id}`);
+export const getArchivedProjects = () => get<Project[]>('/projects/archived');
+export const restoreProject = (id: string) => post<void>(`/projects/${id}/restore`);
 
 // --- Users (for admin/super_admin management + responsible-person pickers) ---
 export const getUsers = () => get<User[]>('/users');
-export const createUser = (input: { phone: string; name: string; role: 'super_admin' | 'admin' }) =>
+export const createUser = (input: { phone: string; name: string; role: 'super_admin' | 'admin'; telegram_username?: string }) =>
   post<User>('/users', input);
+// Any subset of these -- e.g. { telegram_username } alone, or all four at once
+// from the edit-person modal. telegram_username: '' clears it. Promoting role
+// to super_admin is creator-only; the backend re-enforces it.
+export const updateUser = (
+  userId: string,
+  input: Partial<{ name: string; phone: string; telegram_username: string; role: 'admin' | 'super_admin' }>,
+) => patch<void>(`/users/${userId}`, input);
 
 // --- Project memberships ---
 export const addMember = (projectId: string, userId: string) =>
@@ -80,16 +91,23 @@ export const addMember = (projectId: string, userId: string) =>
 export const removeMember = (projectId: string, userId: string) =>
   del<void>(`/projects/${projectId}/members/${userId}`);
 export const getProjectMembers = (projectId: string) =>
-  get<User[]>(`/projects/${projectId}/members`);
+  get<ProjectMember[]>(`/projects/${projectId}/members`);
 
 // --- Tasks ---
 export const getTasks = (projectId: string) => get<Task[]>(`/projects/${projectId}/tasks`);
+// Used to resolve a Telegram deep link (?task=<id>) to its project before the
+// board for that project has even been selected.
+export const getTask = (taskId: string) => get<Task>(`/tasks/${taskId}`);
 
 export interface TaskInput {
   title: string;
   description: string;
   responsible_user_id: string;
   deadline: string | null;
+  priority: Priority;
+  // Predecessor task (same project) that must be done/archived first. undefined
+  // = leave unchanged (edit only), null = no dependency.
+  depends_on_task_id?: string | null;
 }
 
 export const createTask = (projectId: string, input: TaskInput) =>
@@ -106,7 +124,8 @@ export const moveTask = (taskId: string, status: TaskStatus) =>
   post<Task>(`/tasks/${taskId}/move`, { to: status });
 export const confirmTask = (taskId: string) =>
   post<{ success: true; overdue_by: number | null }>(`/tasks/${taskId}/confirm`);
-export const rejectTask = (taskId: string) => post<Task>(`/tasks/${taskId}/reject`);
+export const rejectTask = (taskId: string, comment: string, extraDays: number) =>
+  post<Task>(`/tasks/${taskId}/reject`, { comment, extra_days: extraDays });
 export const deleteTask = (taskId: string) => del<void>(`/tasks/${taskId}`);
 export const restoreTask = (taskId: string, comment: string) =>
   post<Task>(`/tasks/${taskId}/restore`, { comment });

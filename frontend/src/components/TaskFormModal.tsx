@@ -1,13 +1,17 @@
 import { useState, type FormEvent } from 'react';
 import { Loader2, X } from 'lucide-react';
-import type { Task, User } from '../types';
+import type { Priority, Task, User } from '../types';
 import { parseContentBlocks } from '../types';
 import { ApiError, type TaskInput } from '../lib/api';
+import { PRIORITIES } from '../lib/priority';
 import { ContentEditor, type ComposeBlock } from './ContentEditor';
 
 interface TaskFormModalProps {
   task?: Task; // undefined => creating a new task
   members: User[];
+  // Other tasks in this project, offered as an optional predecessor ("can't
+  // start until this one is done" -- see routes.ts POST /tasks/:id/move).
+  otherTasks: Task[];
   onClose: () => void;
   onSubmit: (input: TaskInput, blocks: ComposeBlock[]) => Promise<void>;
 }
@@ -18,27 +22,40 @@ interface TaskFormModalProps {
 // insertable from either type.
 function toComposeBlocks(task: Task | undefined): ComposeBlock[] {
   if (!task) return [];
-  return parseContentBlocks(task).map((b) =>
-    b.type === 'text'
-      ? { id: crypto.randomUUID(), kind: 'text', text: b.text }
-      : {
-          id: crypto.randomUUID(),
-          kind: 'image',
-          attachmentId: b.attachment_id,
-          file: null,
-          previewUrl: `/api/attachments/${b.attachment_id}/download`,
-        },
-  );
+  return parseContentBlocks(task).map((b): ComposeBlock => {
+    if (b.type === 'text') return { id: crypto.randomUUID(), kind: 'text', text: b.text };
+    if (b.type === 'image')
+      return {
+        id: crypto.randomUUID(),
+        kind: 'image',
+        attachmentId: b.attachment_id,
+        file: null,
+        previewUrl: `/api/attachments/${b.attachment_id}/download`,
+      };
+    return {
+      id: crypto.randomUUID(),
+      kind: 'file',
+      attachmentId: b.attachment_id,
+      file: null,
+      filename: b.filename,
+      mimeType: b.mime_type,
+      sizeBytes: b.size_bytes,
+    };
+  });
 }
 
-export function TaskFormModal({ task, members, onClose, onSubmit }: TaskFormModalProps) {
+export function TaskFormModal({ task, members, otherTasks, onClose, onSubmit }: TaskFormModalProps) {
   const [title, setTitle] = useState(task?.title ?? '');
   const [responsibleId, setResponsibleId] = useState(task?.responsible_user_id ?? '');
   const [deadline, setDeadline] = useState(task?.deadline ?? '');
+  const [priority, setPriority] = useState<Priority>(task?.priority ?? 'medium');
+  const [dependsOn, setDependsOn] = useState(task?.depends_on_task_id ?? '');
   const [blocks, setBlocks] = useState<ComposeBlock[]>(() => toComposeBlocks(task));
   const [errors, setErrors] = useState<{ title?: string; responsible?: string }>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const dependencyOptions = otherTasks.filter((t) => t.id !== task?.id);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -63,6 +80,8 @@ export function TaskFormModal({ task, members, onClose, onSubmit }: TaskFormModa
           description,
           responsible_user_id: responsibleId,
           deadline: deadline || null,
+          priority,
+          depends_on_task_id: dependsOn || null,
         },
         blocks,
       );
@@ -153,6 +172,24 @@ export function TaskFormModal({ task, members, onClose, onSubmit }: TaskFormModa
             <div className="mb-2" />
           )}
 
+          <span className="mb-1 block text-sm font-medium text-slate-700">Priority</span>
+          <div className="mb-4 flex gap-2">
+            {PRIORITIES.map((p) => (
+              <button
+                key={p.value}
+                type="button"
+                onClick={() => setPriority(p.value)}
+                aria-pressed={priority === p.value}
+                className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+                  priority === p.value ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <span className={`h-2 w-2 rounded-full ${p.dot}`} aria-hidden="true" />
+                {p.label}
+              </button>
+            ))}
+          </div>
+
           <label htmlFor="task-deadline" className="mb-1 block text-sm font-medium text-slate-700">
             Deadline (optional)
           </label>
@@ -163,6 +200,23 @@ export function TaskFormModal({ task, members, onClose, onSubmit }: TaskFormModa
             onChange={(e) => setDeadline(e.target.value)}
             className="mb-4 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus-visible:outline-blue-600"
           />
+
+          <label htmlFor="task-depends-on" className="mb-1 block text-sm font-medium text-slate-700">
+            Depends on (optional)
+          </label>
+          <select
+            id="task-depends-on"
+            value={dependsOn}
+            onChange={(e) => setDependsOn(e.target.value)}
+            className="mb-4 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-blue-600"
+          >
+            <option value="">No dependency</option>
+            {dependencyOptions.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.title}
+              </option>
+            ))}
+          </select>
 
           <span className="mb-1 block text-sm font-medium text-slate-700">Content</span>
           <ContentEditor blocks={blocks} onChange={setBlocks} />

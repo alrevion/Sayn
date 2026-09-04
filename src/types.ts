@@ -1,11 +1,15 @@
 export type Role = 'creator' | 'super_admin' | 'admin';
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'archived';
+export type Priority = 'urgent' | 'medium' | 'low';
 
 export interface User {
   id: string;
   phone: string;
   name: string;
   role: Role;
+  // Bare Telegram @handle (no leading @), no login use -- lets notifications
+  // @mention the person instead of just naming them. NULL if never set.
+  telegram_username: string | null;
   created_at: string;
 }
 
@@ -29,11 +33,17 @@ export interface Task {
   content_blocks: string | null;
   responsible_user_id: string;
   status: TaskStatus;
+  priority: Priority;
   deadline: string | null;
   done_at: string | null;
   confirmed_at: string | null;
   telegram_message_id: string | null;
   last_escalated_at: string | null;
+  // Single predecessor task (same project) that must be 'done'/'archived'
+  // before this one can move to in_progress. NULL = no dependency.
+  depends_on_task_id: string | null;
+  reminder_sent_at: string | null;
+  review_reminded_at: string | null;
   created_at: string;
   updated_at: string;
 }

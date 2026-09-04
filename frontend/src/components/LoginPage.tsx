@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Send } from 'lucide-react';
 import { ApiError, authLogin, authVerify } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
+
+const VERIFICATION_BOT = 'alrevion_verification_bot';
 
 export function LoginPage() {
   const { setUser } = useAuth();
@@ -107,9 +109,29 @@ export function LoginPage() {
           </form>
         ) : (
           <form onSubmit={handleVerify} noValidate>
-            <p className="mb-4 text-sm text-slate-600">
+            <p className="mb-3 text-sm text-slate-600">
               Code sent to <span className="font-medium">{phone}</span>.
             </p>
+
+            <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 p-3">
+              {/* ?start=login is Telegram's deep-link param -- opening this fires
+                  /start automatically, so there's no separate Start tap needed. */}
+              <a
+                href={`https://t.me/${VERIFICATION_BOT}?start=login`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                <Send className="h-4 w-4" aria-hidden="true" />
+                Open @{VERIFICATION_BOT} in Telegram
+              </a>
+              <p className="mt-2 text-xs text-blue-900">
+                First time signing in? Tap the button above and share your contact when the bot
+                asks -- that's how the code reaches you in Telegram. Already set up? The code
+                should already be in your chat with the bot.
+              </p>
+            </div>
+
             <label htmlFor="code" className="mb-1 block text-sm font-medium text-slate-700">
               Verification code
             </label>
