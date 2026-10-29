@@ -4,3 +4,6 @@ node_modules/
 .dev.vars.*
 frontend/dist/
 .DS_Store
+
+.omc/
+.claude/

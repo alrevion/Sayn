@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"gh repo create alrevion/Sayn --private --source=. --remote=origin --push 2>&1\"}",
-  "error": "Exit code 1\nhttps://github.com/alrevion/Sayn\nERROR: Repository not found.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\nfailed to run git: exit status 128",
-  "timestamp": "2026-07-19T13:02:22.620Z",
-  "retry_count": 1
-}
